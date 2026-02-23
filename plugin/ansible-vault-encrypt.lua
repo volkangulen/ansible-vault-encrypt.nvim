@@ -14,3 +14,7 @@ end, { range = true })
 vim.api.nvim_create_user_command('AnsibleVaultDecrypt', function(opts)
   require('ansible-vault-encrypt').decrypt(opts)
 end, { range = true })
+
+vim.keymap.set({ 'n', 'v' }, '<leader>av', ':AnsibleVaultToggle<CR>', {
+  desc = 'Toggle ansible-vault encrypt/decrypt',
+})

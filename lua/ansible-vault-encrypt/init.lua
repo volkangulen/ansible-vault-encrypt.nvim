@@ -327,10 +327,14 @@ end
 function M.setup(opts)
   M.opts = vim.tbl_deep_extend('force', M.opts, opts or {})
 
-  if M.opts.keymap then
+  -- Remove default keymap and set custom one if user provided a different keymap
+  if M.opts.keymap and M.opts.keymap ~= '<leader>av' then
+    pcall(vim.keymap.del, { 'n', 'v' }, '<leader>av')
     vim.keymap.set({ 'n', 'v' }, M.opts.keymap, ':AnsibleVaultToggle<CR>', {
       desc = 'Toggle ansible-vault encrypt/decrypt',
     })
+  elseif M.opts.keymap == false then
+    pcall(vim.keymap.del, { 'n', 'v' }, '<leader>av')
   end
 end
 
