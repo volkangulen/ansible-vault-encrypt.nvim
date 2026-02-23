@@ -66,11 +66,14 @@ local function split_yaml_entries(text)
 
   local entries = {}
   local current = {}
+  local current_has_key = false
 
   for _, line in ipairs(lines) do
     local indent = line:match('^(%s*)')
     local is_key = line:match('%S') and indent == base_indent and line:match('^%s*[%w_%-%.]+:%s')
-    if is_key and #current > 0 then
+    local is_comment = line:match('%S') and indent == base_indent and line:match('^%s*#')
+    local is_boundary = is_key or (is_comment and current_has_key)
+    if is_boundary and #current > 0 then
       -- Trim trailing blank lines from previous entry
       while #current > 0 and current[#current] == '' do
         table.remove(current)
@@ -79,8 +82,10 @@ local function split_yaml_entries(text)
         entries[#entries + 1] = table.concat(current, '\n')
       end
       current = { line }
+      current_has_key = is_key
     elseif #current > 0 or line:match('%S') then
       current[#current + 1] = line
+      if is_key then current_has_key = true end
     end
   end
 
@@ -99,10 +104,20 @@ local function split_yaml_entries(text)
   return entries
 end
 
+local function is_comment_block(text)
+  for line in text:gmatch('[^\n]+') do
+    local trimmed = line:match('^%s*(.-)%s*$')
+    if trimmed ~= '' and not trimmed:match('^#') then
+      return false
+    end
+  end
+  return true
+end
+
 local function has_unencrypted_entry(text)
   local entries = split_yaml_entries(text)
   for _, entry in ipairs(entries) do
-    if not vault.is_encrypted(entry) then
+    if not vault.is_encrypted(entry) and not is_comment_block(entry) then
       return true
     end
   end
@@ -160,7 +175,7 @@ local function do_encrypt(sel, is_inline)
         -- Multi-entry or inline: process each entry individually
         local results = {}
         for _, entry in ipairs(entries) do
-          if vault.is_encrypted(entry) then
+          if vault.is_encrypted(entry) or is_comment_block(entry) then
             results[#results + 1] = entry
           else
             local yaml_prefix, text_to_encrypt = vault.extract_yaml_key(entry)
