@@ -23,6 +23,14 @@ local function strip_vault_prefix(text)
   return table.concat(lines, '\n')
 end
 
+function M.extract_yaml_key(text)
+  local prefix = text:match('^(%s*[%w_%-%.]+:%s+)')
+  if prefix then
+    return prefix, text:sub(#prefix + 1)
+  end
+  return nil, text
+end
+
 local function build_cmd(subcmd, args)
   local parts = { args.executable or 'ansible-vault', subcmd }
   for _, arg in ipairs(args.extra or {}) do
@@ -125,7 +133,8 @@ function M.decrypt(text, opts)
   return decrypted, nil
 end
 
-function M.format_inline(encrypted_text)
+function M.format_inline(encrypted_text, indent)
+  indent = indent or '  '
   local lines = {}
   for line in encrypted_text:gmatch('[^\n]+') do
     lines[#lines + 1] = line
@@ -135,7 +144,7 @@ function M.format_inline(encrypted_text)
   for _, line in ipairs(lines) do
     local trimmed = line:match('^%s*(.-)%s*$')
     if trimmed ~= '' then
-      result[#result + 1] = '  ' .. trimmed
+      result[#result + 1] = indent .. trimmed
     end
   end
   return table.concat(result, '\n')

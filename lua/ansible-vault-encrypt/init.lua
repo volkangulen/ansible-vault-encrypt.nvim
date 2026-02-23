@@ -76,6 +76,11 @@ local function do_encrypt(sel, is_inline)
     return
   end
 
+  local yaml_prefix, text_to_encrypt = nil, sel.text
+  if is_inline then
+    yaml_prefix, text_to_encrypt = vault.extract_yaml_key(sel.text)
+  end
+
   resolve_vault_config(function(cfg)
     local function run_encrypt(vault_id_entry)
       local encrypt_opts = {
@@ -88,14 +93,19 @@ local function do_encrypt(sel, is_inline)
         encrypt_opts.vault_id_path = vault_id_entry.path
       end
 
-      local result, err = vault.encrypt(sel.text, encrypt_opts)
+      local result, err = vault.encrypt(text_to_encrypt, encrypt_opts)
       if err then
         vim.notify('Encrypt failed: ' .. err, vim.log.levels.ERROR)
         return
       end
 
       if is_inline then
-        result = vault.format_inline(result)
+        if yaml_prefix then
+          local base_indent = yaml_prefix:match('^(%s*)') or ''
+          result = yaml_prefix .. vault.format_inline(result, base_indent .. '  ')
+        else
+          result = vault.format_inline(result)
+        end
       end
 
       replace_text(sel, result)
@@ -129,6 +139,8 @@ local function do_decrypt(sel)
     return
   end
 
+  local yaml_prefix, vault_text = vault.extract_yaml_key(sel.text)
+
   resolve_vault_config(function(cfg)
     local decrypt_opts = {
       executable = M.opts.executable,
@@ -136,10 +148,15 @@ local function do_decrypt(sel)
       vault_ids = cfg.vault_ids,
     }
 
-    local result, err = vault.decrypt(sel.text, decrypt_opts)
+    local result, err = vault.decrypt(vault_text, decrypt_opts)
     if err then
       vim.notify('Decrypt failed: ' .. err, vim.log.levels.ERROR)
       return
+    end
+
+    if yaml_prefix then
+      result = result:gsub('%s+$', '')
+      result = yaml_prefix .. result
     end
 
     replace_text(sel, result)
