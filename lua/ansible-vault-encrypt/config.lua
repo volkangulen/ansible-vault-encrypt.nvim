@@ -1,10 +1,13 @@
 local M = {}
 
-local function expand_path(path)
+local function expand_path(path, base_dir)
   if not path then
     return nil
   end
   path = path:gsub('^~', os.getenv('HOME') or '~')
+  if base_dir and not path:match('^/') then
+    path = base_dir .. '/' .. path
+  end
   return path
 end
 
@@ -41,6 +44,7 @@ function M.parse_cfg(path)
     return nil
   end
 
+  local base_dir = vim.fn.fnamemodify(path, ':p:h')
   local result = {}
   local in_defaults = false
 
@@ -55,7 +59,7 @@ function M.parse_cfg(path)
         value = value:match('^%s*(.-)%s*$')
 
         if key == 'vault_password_file' then
-          result.password_file = expand_path(value)
+          result.password_file = expand_path(value, base_dir)
         elseif key == 'vault_identity_list' then
           result.vault_ids = {}
           for entry in value:gmatch('[^,]+') do
@@ -64,7 +68,7 @@ function M.parse_cfg(path)
             if id and id_path then
               table.insert(result.vault_ids, {
                 id = id,
-                path = expand_path(id_path),
+                path = expand_path(id_path, base_dir),
               })
             end
           end
