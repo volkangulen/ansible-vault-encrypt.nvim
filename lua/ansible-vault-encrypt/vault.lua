@@ -14,14 +14,13 @@ end
 local function strip_vault_prefix(text)
   local trimmed = text:match('^%s*(.-)%s*$')
   if trimmed:match('^!vault%s*|') then
-    local after = trimmed:gsub('^!vault%s*|%s*', '')
-    local lines = {}
-    for line in after:gmatch('[^\n]+') do
-      lines[#lines + 1] = line:match('^%s*(.-)%s*$')
-    end
-    return table.concat(lines, '\n')
+    trimmed = trimmed:gsub('^!vault%s*|%s*', '')
   end
-  return trimmed
+  local lines = {}
+  for line in trimmed:gmatch('[^\n]+') do
+    lines[#lines + 1] = line:match('^%s*(.-)%s*$')
+  end
+  return table.concat(lines, '\n')
 end
 
 local function build_cmd(subcmd, args)
