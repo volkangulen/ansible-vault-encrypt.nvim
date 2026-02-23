@@ -43,6 +43,72 @@ local function replace_text(sel, new_text)
   vim.api.nvim_buf_set_lines(0, sel.start_line - 1, sel.end_line, false, new_lines)
 end
 
+local function split_yaml_entries(text)
+  -- Single vault file (full-file encryption) — return as one entry
+  local trimmed = text:match('^%s*(.-)%s*$')
+  if trimmed:match('^%$ANSIBLE_VAULT;') then
+    return { text }
+  end
+
+  local lines = vim.split(text, '\n', { trimempty = false })
+
+  -- Find the base indentation from first non-blank line
+  local base_indent
+  for _, line in ipairs(lines) do
+    if line:match('%S') then
+      base_indent = line:match('^(%s*)')
+      break
+    end
+  end
+  if not base_indent then
+    return { text }
+  end
+
+  local entries = {}
+  local current = {}
+
+  for _, line in ipairs(lines) do
+    local indent = line:match('^(%s*)')
+    local is_key = line:match('%S') and indent == base_indent and line:match('^%s*[%w_%-%.]+:%s')
+    if is_key and #current > 0 then
+      -- Trim trailing blank lines from previous entry
+      while #current > 0 and current[#current] == '' do
+        table.remove(current)
+      end
+      if #current > 0 then
+        entries[#entries + 1] = table.concat(current, '\n')
+      end
+      current = { line }
+    elseif #current > 0 or line:match('%S') then
+      current[#current + 1] = line
+    end
+  end
+
+  -- Last entry
+  while #current > 0 and current[#current] == '' do
+    table.remove(current)
+  end
+  if #current > 0 then
+    entries[#entries + 1] = table.concat(current, '\n')
+  end
+
+  if #entries == 0 then
+    return { text }
+  end
+
+  return entries
+end
+
+local function has_unencrypted_entry(text)
+  local entries = split_yaml_entries(text)
+  for _, entry in ipairs(entries) do
+    if not vault.is_encrypted(entry) then
+      return true
+    end
+  end
+  return false
+end
+
 local function resolve_vault_config(callback)
   -- User-configured keyfile takes priority
   if M.opts.keyfile then
@@ -76,11 +142,6 @@ local function do_encrypt(sel, is_inline)
     return
   end
 
-  local yaml_prefix, text_to_encrypt = nil, sel.text
-  if is_inline then
-    yaml_prefix, text_to_encrypt = vault.extract_yaml_key(sel.text)
-  end
-
   resolve_vault_config(function(cfg)
     local function run_encrypt(vault_id_entry)
       local encrypt_opts = {
@@ -93,25 +154,43 @@ local function do_encrypt(sel, is_inline)
         encrypt_opts.vault_id_path = vault_id_entry.path
       end
 
-      local result, err = vault.encrypt(text_to_encrypt, encrypt_opts)
-      if err then
-        vim.notify('Encrypt failed: ' .. err, vim.log.levels.ERROR)
-        return
-      end
+      local entries = split_yaml_entries(sel.text)
 
-      if is_inline then
-        if yaml_prefix then
-          local base_indent = yaml_prefix:match('^(%s*)') or ''
-          result = yaml_prefix .. vault.format_inline(result, base_indent .. '  ')
-        else
-          result = vault.format_inline(result)
+      if #entries > 1 or is_inline then
+        -- Multi-entry or inline: process each entry individually
+        local results = {}
+        for _, entry in ipairs(entries) do
+          if vault.is_encrypted(entry) then
+            results[#results + 1] = entry
+          else
+            local yaml_prefix, text_to_encrypt = vault.extract_yaml_key(entry)
+            local result, err = vault.encrypt(text_to_encrypt, encrypt_opts)
+            if err then
+              vim.notify('Encrypt failed: ' .. err, vim.log.levels.ERROR)
+              return
+            end
+            if yaml_prefix then
+              local base_indent = yaml_prefix:match('^(%s*)') or ''
+              result = yaml_prefix .. vault.format_inline(result, base_indent .. '  ')
+            else
+              result = vault.format_inline(result)
+            end
+            results[#results + 1] = result
+          end
         end
+        replace_text(sel, table.concat(results, '\n\n'))
+      else
+        -- Single entry, full buffer: encrypt as whole vault file
+        local result, err = vault.encrypt(sel.text, encrypt_opts)
+        if err then
+          vim.notify('Encrypt failed: ' .. err, vim.log.levels.ERROR)
+          return
+        end
+        replace_text(sel, result)
       end
-
-      replace_text(sel, result)
     end
 
-    -- Determine vault ID
+    -- Determine vault ID (once for all entries)
     if M.opts.encrypt_vault_id and cfg.vault_ids then
       -- Find matching configured vault ID
       for _, vid in ipairs(cfg.vault_ids) do
@@ -139,8 +218,6 @@ local function do_decrypt(sel)
     return
   end
 
-  local yaml_prefix, vault_text = vault.extract_yaml_key(sel.text)
-
   resolve_vault_config(function(cfg)
     local decrypt_opts = {
       executable = M.opts.executable,
@@ -148,18 +225,28 @@ local function do_decrypt(sel)
       vault_ids = cfg.vault_ids,
     }
 
-    local result, err = vault.decrypt(vault_text, decrypt_opts)
-    if err then
-      vim.notify('Decrypt failed: ' .. err, vim.log.levels.ERROR)
-      return
+    local entries = split_yaml_entries(sel.text)
+    local results = {}
+
+    for _, entry in ipairs(entries) do
+      if not vault.is_encrypted(entry) then
+        results[#results + 1] = entry
+      else
+        local yaml_prefix, vault_text = vault.extract_yaml_key(entry)
+        local result, err = vault.decrypt(vault_text, decrypt_opts)
+        if err then
+          vim.notify('Decrypt failed: ' .. err, vim.log.levels.ERROR)
+          return
+        end
+        if yaml_prefix then
+          result = result:gsub('%s+$', '')
+          result = yaml_prefix .. result
+        end
+        results[#results + 1] = result
+      end
     end
 
-    if yaml_prefix then
-      result = result:gsub('%s+$', '')
-      result = yaml_prefix .. result
-    end
-
-    replace_text(sel, result)
+    replace_text(sel, table.concat(results, '\n\n'))
   end)
 end
 
@@ -167,18 +254,18 @@ local function execute(mode)
   local is_visual = mode == 'visual'
   local sel = is_visual and get_visual_selection() or get_buffer_text()
 
-  if vault.is_encrypted(sel.text) then
-    if mode == 'encrypt_only' then
-      vim.notify('Text is already encrypted', vim.log.levels.WARN)
-      return
-    end
-    do_decrypt(sel)
-  else
+  if has_unencrypted_entry(sel.text) then
     if mode == 'decrypt_only' then
       vim.notify('Text is not encrypted', vim.log.levels.WARN)
       return
     end
     do_encrypt(sel, is_visual)
+  else
+    if mode == 'encrypt_only' then
+      vim.notify('Text is already encrypted', vim.log.levels.WARN)
+      return
+    end
+    do_decrypt(sel)
   end
 end
 
@@ -202,7 +289,7 @@ function M.encrypt(cmd_opts)
   local mode = detect_mode(cmd_opts)
   local sel = mode == 'visual' and get_visual_selection() or get_buffer_text()
 
-  if vault.is_encrypted(sel.text) then
+  if not has_unencrypted_entry(sel.text) then
     vim.notify('Text is already encrypted', vim.log.levels.WARN)
     return
   end
