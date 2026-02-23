@@ -24,6 +24,7 @@ The plugin auto-discovers your `ansible.cfg` and registers commands and keybindi
 - **Comment-aware** -- lines starting with `#` are preserved as-is during batch operations
 - **Vault identity selection** -- prompted via `vim.ui.select` when multiple vault IDs are configured
 - **Auto-discovers `ansible.cfg`** from `$ANSIBLE_CONFIG`, `./ansible.cfg`, `~/.ansible.cfg`, or `/etc/ansible/ansible.cfg`
+- **Pin `ansible.cfg` to session** -- open an `ansible.cfg` and press `<leader>ac` to lock it in, or press from any buffer to browse for one
 
 ## Commands
 
@@ -32,14 +33,16 @@ The plugin auto-discovers your `ansible.cfg` and registers commands and keybindi
 | `:AnsibleVaultToggle` | Encrypt or decrypt (auto-detects current state) |
 | `:AnsibleVaultEncrypt` | Encrypt only (warns if already encrypted) |
 | `:AnsibleVaultDecrypt` | Decrypt only (warns if not encrypted) |
+| `:AnsibleVaultPinCfg` | Pin an `ansible.cfg` for the session |
 
-All commands work in normal mode (full buffer) and with visual selections (inline).
+All encrypt/decrypt commands work in normal mode (full buffer) and with visual selections (inline).
 
 ## Default Keybinding
 
 | Key | Mode | Action |
 |---|---|---|
 | `<leader>av` | Normal, Visual | `:AnsibleVaultToggle` |
+| `<leader>ac` | Normal | `:AnsibleVaultPinCfg` |
 
 ## Configuration
 
@@ -123,6 +126,13 @@ api_key: !vault |
 ```
 
 Select the encrypted lines and press `<leader>av` again to decrypt them back.
+
+### Pin ansible.cfg to session
+
+If your project's `ansible.cfg` isn't auto-discovered (e.g. it's in a parent directory), you can pin it for the session:
+
+- **From an `ansible.cfg` buffer**: Open the file and press `<leader>ac` -- the current buffer's path is pinned immediately.
+- **From any other buffer**: Press `<leader>ac` and you'll be prompted for a path (with tab-completion).
 
 ### Mixed content
 

@@ -324,6 +324,28 @@ function M.decrypt(cmd_opts)
   do_decrypt(sel)
 end
 
+function M.pin_cfg()
+  local bufname = vim.fn.expand('%:t')
+  if bufname == 'ansible.cfg' then
+    local path = vim.fn.expand('%:p')
+    M.opts.ansible_cfg = path
+    vim.notify('Pinned ansible.cfg: ' .. path, vim.log.levels.INFO)
+  else
+    vim.ui.input({ prompt = 'Path to ansible.cfg: ', completion = 'file' }, function(input)
+      if not input or input == '' then
+        return
+      end
+      local path = vim.fn.expand(input)
+      if vim.fn.filereadable(path) == 0 then
+        vim.notify('File not found: ' .. path, vim.log.levels.ERROR)
+        return
+      end
+      M.opts.ansible_cfg = path
+      vim.notify('Pinned ansible.cfg: ' .. path, vim.log.levels.INFO)
+    end)
+  end
+end
+
 function M.setup(opts)
   M.opts = vim.tbl_deep_extend('force', M.opts, opts or {})
 
