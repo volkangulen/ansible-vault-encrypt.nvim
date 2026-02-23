@@ -328,11 +328,8 @@ function M.setup(opts)
   M.opts = vim.tbl_deep_extend('force', M.opts, opts or {})
 
   if M.opts.keymap then
-    vim.keymap.set('n', M.opts.keymap, '<cmd>AnsibleVaultToggle<CR>', {
+    vim.keymap.set({ 'n', 'v' }, M.opts.keymap, ':AnsibleVaultToggle<CR>', {
       desc = 'Toggle ansible-vault encrypt/decrypt',
-    })
-    vim.keymap.set('v', M.opts.keymap, ':AnsibleVaultToggle<CR>', {
-      desc = 'Toggle ansible-vault encrypt/decrypt (visual)',
     })
   end
 end
