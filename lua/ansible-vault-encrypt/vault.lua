@@ -33,6 +33,17 @@ local function build_cmd(subcmd, args)
   return table.concat(parts, ' ')
 end
 
+-- Overwrite a plaintext temp file with zeros before removing it, since
+-- ansible-vault is told to write elsewhere and never shreds it.
+local function wipe_file(path, size)
+  local f = io.open(path, 'w')
+  if f then
+    f:write(string.rep('\0', size))
+    f:close()
+  end
+  os.remove(path)
+end
+
 function M.encrypt(text, opts)
   opts = opts or {}
   local executable = opts.executable or 'ansible-vault'
@@ -45,9 +56,14 @@ function M.encrypt(text, opts)
   f:write(text)
   f:close()
 
+  -- Write the ciphertext to a separate file. Encrypting in place makes
+  -- ansible-vault shred the plaintext first, and its fallback shredder
+  -- crashes with a division by zero on 1-byte files when `shred` fails.
+  local outfile = vim.fn.tempname()
+
   local cmd = build_cmd('encrypt', {
     executable = executable,
-    extra = { tmpfile },
+    extra = { tmpfile, '--output=' .. vim.fn.shellescape(outfile) },
   })
 
   if opts.vault_id then
@@ -62,20 +78,20 @@ function M.encrypt(text, opts)
 
   local output = vim.fn.system(cmd)
   local exit_code = vim.v.shell_error
+  wipe_file(tmpfile, #text)
 
   if exit_code ~= 0 then
-    os.remove(tmpfile)
+    os.remove(outfile)
     return nil, output
   end
 
-  local rf = io.open(tmpfile, 'r')
+  local rf = io.open(outfile, 'r')
   if not rf then
-    os.remove(tmpfile)
     return nil, 'Failed to read encrypted file'
   end
   local encrypted = rf:read('*a')
   rf:close()
-  os.remove(tmpfile)
+  os.remove(outfile)
 
   return encrypted, nil
 end

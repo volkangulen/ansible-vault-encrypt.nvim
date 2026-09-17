@@ -296,6 +296,36 @@ do
   check('comment indent: decrypt restores original', dump(lines()) == dump(original), dump(lines()))
 end
 
+-- Test 16: one-byte values encrypt even when the system `shred` fails.
+-- ansible-vault's fallback shredder divides by a random chunk length that can
+-- be zero for a 1-byte file, so the plugin must never let it shred plaintext.
+do
+  local fakebin = vim.fn.tempname()
+  vim.fn.mkdir(fakebin, 'p')
+  local sh = assert(io.open(fakebin .. '/shred', 'w'))
+  sh:write('#!/bin/sh\nexit 1\n')
+  sh:close()
+  vim.fn.setfperm(fakebin .. '/shred', 'rwxr-xr-x')
+  local saved_path = vim.env.PATH
+  vim.env.PATH = fakebin .. ':' .. saved_path
+
+  local original = { 'shares: 5', 'threshold: 3' }
+  local failed = 0
+  for _ = 1, 10 do
+    set_buffer(original)
+    select_lines(1, 2)
+    avc.encrypt({ range = 2 })
+    local out = lines()
+    if out[1] ~= 'shares: !vault |' or not dump(out):match('\nthreshold: !vault |\n') then
+      failed = failed + 1
+    end
+  end
+  check('one-byte values: encrypt with failing shred', failed == 0, failed .. '/10 attempts failed')
+
+  vim.env.PATH = saved_path
+  vim.fn.delete(fakebin, 'rf')
+end
+
 os.remove(keyfile)
 if failures > 0 then
   print(failures .. ' failure(s)')
