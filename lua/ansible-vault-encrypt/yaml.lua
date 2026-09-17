@@ -7,14 +7,22 @@
 
 local M = {}
 
--- Match `key:` or `key: rest`. A colon must be followed by whitespace or the
--- end of the line, so scalars like `https://x` are not mistaken for keys.
+-- Match `key:` or `key: rest`. The key runs up to the first colon that is
+-- followed by whitespace or the end of the line, so scalars like `https://x`
+-- are not mistaken for keys while keys such as `user@example.com` or
+-- `https://example.com` are accepted. List items, comments and tagged
+-- values (`- x`, `# x`, `!vault |`) are never keys.
 local function match_key(line)
-  local indent, key, rest = line:match('^(%s*)([%w_%-%.]+):(.*)$')
-  if not key then
+  local indent, body = line:match('^(%s*)(.-)%s*$')
+  if body == '' or body:match('^[#!&*]') or body == '-' or body:match('^%-%s') then
     return nil
   end
-  if rest ~= '' and not rest:match('^%s') then
+  local key, rest = body:match('^(.-):(%s.*)$')
+  if not key then
+    key = body:match('^(.-):$')
+    rest = ''
+  end
+  if not key or key == '' then
     return nil
   end
   return indent, key, rest

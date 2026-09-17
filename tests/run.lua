@@ -326,6 +326,28 @@ do
   vim.fn.delete(fakebin, 'rf')
 end
 
+-- Test 17: keys with characters like `@` or `/` are still recognised as mapping keys
+do
+  local original = {
+    'users:',
+    '  someone@example.com:',
+    '    hash: abc',
+    '    password: def',
+    '  https://example.com: ghi',
+  }
+  set_buffer(original)
+  select_lines(1, #original)
+  avc.encrypt({ range = 2 })
+  local out = lines()
+  check('email key: parent kept', out[1] == 'users:' and out[2] == '  someone@example.com:', dump(out))
+  check('email key: hash is a leaf', dump(out):match('\n    hash: !vault |\n') ~= nil, dump(out))
+  check('email key: password is a leaf', dump(out):match('\n    password: !vault |\n') ~= nil, dump(out))
+  check('url key: recognised as key', dump(out):match('\n  https://example.com: !vault |\n') ~= nil, dump(out))
+  select_lines(1, #out)
+  avc.decrypt({ range = 2 })
+  check('email key: decrypt restores original', dump(lines()) == dump(original), dump(lines()))
+end
+
 os.remove(keyfile)
 if failures > 0 then
   print(failures .. ' failure(s)')
