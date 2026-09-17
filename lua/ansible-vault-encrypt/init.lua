@@ -66,6 +66,9 @@ end
 local function encrypted_leaf_lines(leaf, encrypted)
   local out = vim.split(vault.format_inline(encrypted, leaf.indent .. '  '), '\n', { trimempty = false })
   out[1] = leaf.indent .. (leaf.key and (leaf.key .. ': ') or '') .. out[1]
+  if leaf.comment then
+    out[1] = out[1] .. ' ' .. leaf.comment
+  end
   return out
 end
 
@@ -73,12 +76,15 @@ end
 -- line goes back after `key:`; an empty first line means the value was a
 -- block (e.g. a list) and its lines follow the key line verbatim.
 local function decrypted_leaf_lines(leaf, plaintext)
-  plaintext = plaintext:gsub('%s+$', '')
+  -- ansible-vault round-trips bytes exactly; only drop a final newline that
+  -- came from a file-based encryption, never other trailing whitespace.
+  plaintext = plaintext:gsub('\n$', '')
   local plines = vim.split(plaintext, '\n', { trimempty = false })
   if not leaf.key then
     return plines
   end
   local first = table.remove(plines, 1)
+  local comment = leaf.value:match('^!vault%s*|%s*(#[^\n]*)')
   local out = {}
   if leaf.value:match('^\n') and first ~= '' then
     -- Legacy layout: `key:` with `!vault |` on the next line, produced by
@@ -89,6 +95,9 @@ local function decrypted_leaf_lines(leaf, plaintext)
     out[1] = leaf.indent .. leaf.key .. ': ' .. first
   else
     out[1] = leaf.indent .. leaf.key .. ':'
+  end
+  if comment then
+    out[1] = out[1] .. ' ' .. comment
   end
   for _, l in ipairs(plines) do
     out[#out + 1] = l

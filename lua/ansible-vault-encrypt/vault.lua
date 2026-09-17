@@ -14,7 +14,9 @@ end
 local function strip_vault_prefix(text)
   local trimmed = text:match('^%s*(.-)%s*$')
   if trimmed:match('!vault%s*|') then
-    trimmed = trimmed:gsub('^.*!vault%s*|%s*', '')
+    -- Drop everything up to and including the `!vault |` line, so an inline
+    -- comment after the indicator is not treated as ciphertext.
+    trimmed = trimmed:gsub('^.*!vault%s*|[^\n]*', '')
   end
   local lines = {}
   for line in trimmed:gmatch('[^\n]+') do

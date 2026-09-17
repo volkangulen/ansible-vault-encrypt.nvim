@@ -7,7 +7,18 @@
 
 local M = {}
 
-local KEY_PATTERN = '^(%s*)([%w_%-%.]+):(.*)$'
+-- Match `key:` or `key: rest`. A colon must be followed by whitespace or the
+-- end of the line, so scalars like `https://x` are not mistaken for keys.
+local function match_key(line)
+  local indent, key, rest = line:match('^(%s*)([%w_%-%.]+):(.*)$')
+  if not key then
+    return nil
+  end
+  if rest ~= '' and not rest:match('^%s') then
+    return nil
+  end
+  return indent, key, rest
+end
 
 local function is_blank(line)
   return not line:match('%S')
@@ -37,7 +48,7 @@ end
 local function parse_entries(lines)
   local base
   for _, l in ipairs(lines) do
-    if not is_blank(l) then
+    if not is_blank(l) and not is_comment(l) then
       base = indent_of(l)
       break
     end
@@ -51,7 +62,7 @@ local function parse_entries(lines)
   local key_count = 0
   for _, l in ipairs(lines) do
     local at_base = not is_blank(l) and indent_of(l) == base
-    local is_key = at_base and l:match(KEY_PATTERN) ~= nil
+    local is_key = at_base and match_key(l) ~= nil
     local starts = is_key or (at_base and is_comment(l))
     if starts or not cur then
       cur = { lines = {}, is_key = is_key }
@@ -84,6 +95,7 @@ end
 --
 -- leaf.indent  indentation string of the key line ('' for a keyless block)
 -- leaf.key     key name, or nil when the whole block has no keys
+-- leaf.comment inline `# ...` comment from a `key: # note` header, if any
 -- leaf.value   the value text: what follows `key:` (trimmed) plus any
 --              continuation lines; a block value (list, etc.) starts with
 --              '\n' followed by the raw child lines.
@@ -100,9 +112,15 @@ function M.walk(lines, visit)
     if all_comments(lines) then
       return lines
     end
-    local body = {}
-    local trailing = {}
-    append(body, lines)
+    local leading, body, trailing = {}, {}, {}
+    local i = 1
+    while i <= #lines and (is_blank(lines[i]) or is_comment(lines[i])) do
+      leading[#leading + 1] = lines[i]
+      i = i + 1
+    end
+    for j = i, #lines do
+      body[#body + 1] = lines[j]
+    end
     while #body > 0 and is_blank(body[#body]) do
       table.insert(trailing, 1, table.remove(body))
     end
@@ -111,6 +129,7 @@ function M.walk(lines, visit)
       return nil, err
     end
     local out = {}
+    append(out, leading)
     append(out, replacement or body)
     append(out, trailing)
     return out
@@ -122,7 +141,7 @@ function M.walk(lines, visit)
       append(out, entry.lines)
     else
       local first = entry.lines[1]
-      local indent, key, rest = first:match(KEY_PATTERN)
+      local indent, key, rest = match_key(first)
       local body = {}
       for i = 2, #entry.lines do
         body[#body + 1] = entry.lines[i]
@@ -133,7 +152,9 @@ function M.walk(lines, visit)
       end
 
       local rest_trim = trim(rest)
+      local comment
       if rest_trim:match('^#') then
+        comment = rest_trim
         rest_trim = ''
       end
 
@@ -152,7 +173,7 @@ function M.walk(lines, visit)
             break
           end
         end
-        if not first_child or first_child:match(KEY_PATTERN) then
+        if not first_child or match_key(first_child) then
           local sub
           sub, err = M.walk(body, visit)
           if sub then
@@ -160,7 +181,12 @@ function M.walk(lines, visit)
             append(replacement, sub)
           end
         else
-          replacement, err = visit({ indent = indent, key = key, value = '\n' .. table.concat(body, '\n') })
+          replacement, err = visit({
+            indent = indent,
+            key = key,
+            comment = comment,
+            value = '\n' .. table.concat(body, '\n'),
+          })
         end
       end
 

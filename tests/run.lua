@@ -232,6 +232,70 @@ do
   check('legacy: decrypts to nested mapping', dump(lines()) == 'vault_key1:\n  prop1: 123\n  prop2: abc', dump(lines()))
 end
 
+-- Test 11: a keyless scalar containing a colon is not mistaken for a key
+do
+  local original = { 'https://secret' }
+  set_buffer(original)
+  select_lines(1, 1)
+  avc.encrypt({ range = 2 })
+  local out = lines()
+  check('colon: bare inline vault, not a key', out[1] == '!vault |', dump(out))
+  select_lines(1, #out)
+  avc.decrypt({ range = 2 })
+  check('colon: decrypt restores original', dump(lines()) == dump(original), dump(lines()))
+end
+
+-- Test 12: inline comment on a block value's key line survives the round trip
+do
+  local original = { 'ports: # note', '  - 1', '  - 2' }
+  set_buffer(original)
+  select_lines(1, 3)
+  avc.encrypt({ range = 2 })
+  local out = lines()
+  check('header comment: kept on vault line', out[1] == 'ports: !vault | # note', dump(out))
+  select_lines(1, #out)
+  avc.decrypt({ range = 2 })
+  check('header comment: decrypt restores original', dump(lines()) == dump(original), dump(lines()))
+end
+
+-- Test 13: trailing spaces inside a block scalar are not trimmed on decrypt
+do
+  local original = { 'cert: |', '  line  ' }
+  set_buffer(original)
+  select_lines(1, 2)
+  avc.encrypt({ range = 2 })
+  local out = lines()
+  select_lines(1, #out)
+  avc.decrypt({ range = 2 })
+  check('trailing spaces: decrypt is lossless', dump(lines()) == dump(original), dump(lines()))
+end
+
+-- Test 14: keyless selection with a leading comment keeps the comment outside the value
+do
+  local original = { '# note', 'secret' }
+  set_buffer(original)
+  select_lines(1, 2)
+  avc.encrypt({ range = 2 })
+  local out = lines()
+  check('keyless comment: comment kept', out[1] == '# note' and out[2] == '!vault |', dump(out))
+  select_lines(1, #out)
+  avc.decrypt({ range = 2 })
+  check('keyless comment: decrypt restores original', dump(lines()) == dump(original), dump(lines()))
+end
+
+-- Test 15: a comment indented differently from the keys does not set the base indent
+do
+  local original = { '  # note', 'secret: value' }
+  set_buffer(original)
+  select_lines(1, 2)
+  avc.encrypt({ range = 2 })
+  local out = lines()
+  check('comment indent: key recognised', out[1] == '  # note' and out[2] == 'secret: !vault |', dump(out))
+  select_lines(1, #out)
+  avc.decrypt({ range = 2 })
+  check('comment indent: decrypt restores original', dump(lines()) == dump(original), dump(lines()))
+end
+
 os.remove(keyfile)
 if failures > 0 then
   print(failures .. ' failure(s)')
