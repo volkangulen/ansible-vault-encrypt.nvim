@@ -23,14 +23,6 @@ local function strip_vault_prefix(text)
   return table.concat(lines, '\n')
 end
 
-function M.extract_yaml_key(text)
-  local prefix = text:match('^(%s*[%w_%-%.]+:%s+)')
-  if prefix then
-    return prefix, text:sub(#prefix + 1)
-  end
-  return nil, text
-end
-
 local function build_cmd(subcmd, args)
   local parts = { args.executable or 'ansible-vault', subcmd }
   for _, arg in ipairs(args.extra or {}) do

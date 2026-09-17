@@ -21,6 +21,7 @@ The plugin auto-discovers your `ansible.cfg` and registers commands and keybindi
 - **Full-file encryption** in normal mode (produces standard `$ANSIBLE_VAULT;` format)
 - **Inline encryption** in visual mode (produces YAML `!vault |` format with proper indentation)
 - **Multi-entry support** -- select multiple YAML key-value pairs and encrypt/decrypt them all at once
+- **Nested mappings** -- selecting a key whose value is a mapping encrypts each innermost value individually, keeping the structure readable
 - **Comment-aware** -- lines starting with `#` are preserved as-is during batch operations
 - **Vault identity selection** -- prompted via `vim.ui.select` when multiple vault IDs are configured
 - **Auto-discovers `ansible.cfg`** from `$ANSIBLE_CONFIG`, `./ansible.cfg`, `~/.ansible.cfg`, or `/etc/ansible/ansible.cfg`
@@ -126,6 +127,40 @@ api_key: !vault |
 ```
 
 Select the encrypted lines and press `<leader>av` again to decrypt them back.
+
+### Nested mappings
+
+When the selection contains a key whose value is a mapping, the plugin recurses into it and encrypts each innermost scalar on its own. Parent keys, comments and blank lines are kept as they are. A value that is a list (or any other non-mapping block) is encrypted as a single value under its key.
+
+```yaml
+# Before
+database:
+  host: db.example.com
+  credentials:
+    user: admin
+    password: supersecret
+  ports:
+    - 5432
+    - 5433
+
+# After
+database:
+  host: !vault |
+    $ANSIBLE_VAULT;1.1;AES256
+    3030...
+  credentials:
+    user: !vault |
+      $ANSIBLE_VAULT;1.1;AES256
+      6161...
+    password: !vault |
+      $ANSIBLE_VAULT;1.1;AES256
+      6262...
+  ports: !vault |
+    $ANSIBLE_VAULT;1.1;AES256
+    6363...
+```
+
+Decrypting the same selection restores the original layout.
 
 ### Pin ansible.cfg to session
 

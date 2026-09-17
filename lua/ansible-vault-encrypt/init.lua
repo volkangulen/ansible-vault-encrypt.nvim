@@ -1,6 +1,7 @@
 local config = require('ansible-vault-encrypt.config')
 local vault = require('ansible-vault-encrypt.vault')
 local ui = require('ansible-vault-encrypt.ui')
+local yaml = require('ansible-vault-encrypt.yaml')
 
 local M = {}
 
@@ -19,6 +20,7 @@ local function get_visual_selection()
   local end_line = end_pos[2]
   local lines = vim.api.nvim_buf_get_lines(0, start_line - 1, end_line, false)
   return {
+    lines = lines,
     text = table.concat(lines, '\n'),
     start_line = start_line,
     end_line = end_line,
@@ -28,10 +30,15 @@ end
 local function get_buffer_text()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   return {
+    lines = lines,
     text = table.concat(lines, '\n'),
     start_line = 1,
     end_line = #lines,
   }
+end
+
+local function replace_lines(sel, new_lines)
+  vim.api.nvim_buf_set_lines(0, sel.start_line - 1, sel.end_line, false, new_lines)
 end
 
 local function replace_text(sel, new_text)
@@ -40,88 +47,53 @@ local function replace_text(sel, new_text)
   if #new_lines > 1 and new_lines[#new_lines] == '' then
     table.remove(new_lines)
   end
-  vim.api.nvim_buf_set_lines(0, sel.start_line - 1, sel.end_line, false, new_lines)
+  replace_lines(sel, new_lines)
 end
 
-local function split_yaml_entries(text)
-  -- Single vault file (full-file encryption) — return as one entry
-  local trimmed = text:match('^%s*(.-)%s*$')
-  if trimmed:match('^%$ANSIBLE_VAULT;') then
-    return { text }
-  end
-
-  local lines = vim.split(text, '\n', { trimempty = false })
-
-  -- Find the base indentation from first non-blank line
-  local base_indent
-  for _, line in ipairs(lines) do
-    if line:match('%S') then
-      base_indent = line:match('^(%s*)')
-      break
+local function has_unencrypted_leaf(lines)
+  local found = false
+  yaml.walk(lines, function(leaf)
+    if not vault.is_encrypted(leaf.value) then
+      found = true
     end
-  end
-  if not base_indent then
-    return { text }
-  end
-
-  local entries = {}
-  local current = {}
-  local current_has_key = false
-
-  for _, line in ipairs(lines) do
-    local indent = line:match('^(%s*)')
-    local is_key = line:match('%S') and indent == base_indent and line:match('^%s*[%w_%-%.]+:%s')
-    local is_comment = line:match('%S') and indent == base_indent and line:match('^%s*#')
-    local is_boundary = is_key or (is_comment and current_has_key)
-    if is_boundary and #current > 0 then
-      -- Trim trailing blank lines from previous entry
-      while #current > 0 and current[#current] == '' do
-        table.remove(current)
-      end
-      if #current > 0 then
-        entries[#entries + 1] = table.concat(current, '\n')
-      end
-      current = { line }
-      current_has_key = is_key
-    elseif #current > 0 or line:match('%S') then
-      current[#current + 1] = line
-      if is_key then current_has_key = true end
-    end
-  end
-
-  -- Last entry
-  while #current > 0 and current[#current] == '' do
-    table.remove(current)
-  end
-  if #current > 0 then
-    entries[#entries + 1] = table.concat(current, '\n')
-  end
-
-  if #entries == 0 then
-    return { text }
-  end
-
-  return entries
+    return nil
+  end)
+  return found
 end
 
-local function is_comment_block(text)
-  for line in text:gmatch('[^\n]+') do
-    local trimmed = line:match('^%s*(.-)%s*$')
-    if trimmed ~= '' and not trimmed:match('^#') then
-      return false
-    end
-  end
-  return true
+-- Build the replacement lines for an encrypted leaf: `key: !vault |` followed
+-- by the ciphertext indented two spaces deeper than the key.
+local function encrypted_leaf_lines(leaf, encrypted)
+  local out = vim.split(vault.format_inline(encrypted, leaf.indent .. '  '), '\n', { trimempty = false })
+  out[1] = leaf.indent .. (leaf.key and (leaf.key .. ': ') or '') .. out[1]
+  return out
 end
 
-local function has_unencrypted_entry(text)
-  local entries = split_yaml_entries(text)
-  for _, entry in ipairs(entries) do
-    if not vault.is_encrypted(entry) and not is_comment_block(entry) then
-      return true
-    end
+-- Build the replacement lines for a decrypted leaf. The plaintext's first
+-- line goes back after `key:`; an empty first line means the value was a
+-- block (e.g. a list) and its lines follow the key line verbatim.
+local function decrypted_leaf_lines(leaf, plaintext)
+  plaintext = plaintext:gsub('%s+$', '')
+  local plines = vim.split(plaintext, '\n', { trimempty = false })
+  if not leaf.key then
+    return plines
   end
-  return false
+  local first = table.remove(plines, 1)
+  local out = {}
+  if leaf.value:match('^\n') and first ~= '' then
+    -- Legacy layout: `key:` with `!vault |` on the next line, produced by
+    -- older versions that encrypted a whole nested block under one key.
+    out[1] = leaf.indent .. leaf.key .. ':'
+    out[2] = leaf.indent .. '  ' .. first
+  elseif first ~= '' then
+    out[1] = leaf.indent .. leaf.key .. ': ' .. first
+  else
+    out[1] = leaf.indent .. leaf.key .. ':'
+  end
+  for _, l in ipairs(plines) do
+    out[#out + 1] = l
+  end
+  return out
 end
 
 local function resolve_vault_config(callback)
@@ -169,31 +141,23 @@ local function do_encrypt(sel, is_inline)
         encrypt_opts.vault_id_path = vault_id_entry.path
       end
 
-      local entries = split_yaml_entries(sel.text)
-
-      if #entries > 1 or is_inline then
-        -- Multi-entry or inline: process each entry individually
-        local results = {}
-        for _, entry in ipairs(entries) do
-          if vault.is_encrypted(entry) or is_comment_block(entry) then
-            results[#results + 1] = entry
-          else
-            local yaml_prefix, text_to_encrypt = vault.extract_yaml_key(entry)
-            local result, err = vault.encrypt(text_to_encrypt, encrypt_opts)
-            if err then
-              vim.notify('Encrypt failed: ' .. err, vim.log.levels.ERROR)
-              return
-            end
-            if yaml_prefix then
-              local base_indent = yaml_prefix:match('^(%s*)') or ''
-              result = yaml_prefix .. vault.format_inline(result, base_indent .. '  ')
-            else
-              result = vault.format_inline(result)
-            end
-            results[#results + 1] = result
+      if is_inline or yaml.top_level_key_count(sel.lines) > 1 then
+        -- Inline or multi-entry: encrypt each leaf value individually
+        local new_lines, err = yaml.walk(sel.lines, function(leaf)
+          if vault.is_encrypted(leaf.value) then
+            return nil
           end
+          local encrypted, enc_err = vault.encrypt(leaf.value, encrypt_opts)
+          if enc_err then
+            return nil, enc_err
+          end
+          return encrypted_leaf_lines(leaf, encrypted)
+        end)
+        if err then
+          vim.notify('Encrypt failed: ' .. err, vim.log.levels.ERROR)
+          return
         end
-        replace_text(sel, table.concat(results, '\n\n'))
+        replace_lines(sel, new_lines)
       else
         -- Single entry, full buffer: encrypt as whole vault file
         local result, err = vault.encrypt(sel.text, encrypt_opts)
@@ -240,28 +204,21 @@ local function do_decrypt(sel)
       vault_ids = cfg.vault_ids,
     }
 
-    local entries = split_yaml_entries(sel.text)
-    local results = {}
-
-    for _, entry in ipairs(entries) do
-      if not vault.is_encrypted(entry) then
-        results[#results + 1] = entry
-      else
-        local yaml_prefix, vault_text = vault.extract_yaml_key(entry)
-        local result, err = vault.decrypt(vault_text, decrypt_opts)
-        if err then
-          vim.notify('Decrypt failed: ' .. err, vim.log.levels.ERROR)
-          return
-        end
-        if yaml_prefix then
-          result = result:gsub('%s+$', '')
-          result = yaml_prefix .. result
-        end
-        results[#results + 1] = result
+    local new_lines, err = yaml.walk(sel.lines, function(leaf)
+      if not vault.is_encrypted(leaf.value) then
+        return nil
       end
+      local plaintext, dec_err = vault.decrypt(leaf.value, decrypt_opts)
+      if dec_err then
+        return nil, dec_err
+      end
+      return decrypted_leaf_lines(leaf, plaintext)
+    end)
+    if err then
+      vim.notify('Decrypt failed: ' .. err, vim.log.levels.ERROR)
+      return
     end
-
-    replace_text(sel, table.concat(results, '\n\n'))
+    replace_lines(sel, new_lines)
   end)
 end
 
@@ -269,7 +226,7 @@ local function execute(mode)
   local is_visual = mode == 'visual'
   local sel = is_visual and get_visual_selection() or get_buffer_text()
 
-  if has_unencrypted_entry(sel.text) then
+  if has_unencrypted_leaf(sel.lines) then
     if mode == 'decrypt_only' then
       vim.notify('Text is not encrypted', vim.log.levels.WARN)
       return
@@ -304,7 +261,7 @@ function M.encrypt(cmd_opts)
   local mode = detect_mode(cmd_opts)
   local sel = mode == 'visual' and get_visual_selection() or get_buffer_text()
 
-  if not has_unencrypted_entry(sel.text) then
+  if not has_unencrypted_leaf(sel.lines) then
     vim.notify('Text is already encrypted', vim.log.levels.WARN)
     return
   end
